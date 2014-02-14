@@ -1,0 +1,231 @@
+diff --git a/forum_access.admin.inc b/forum_access.admin.inc
+index 4dba751..0e54ecf 100644
+--- a/forum_access.admin.inc
++++ b/forum_access.admin.inc
+@@ -141,7 +141,7 @@ function _forum_access_forum_permissions_form($is_container) {
+       '#markup'  => '<div>' . t('Note that users need') . '<ul style="margin-top: 0"><li>' .
+                               t('the !access_content and !access_comments permissions <strong>AND <em>View</em></strong> to be able to see this forum and its content at all,', $variables) . '</li><li>' .
+                               t('the !create_forum_content (and similar) permissions <strong>AND <em>Post</em></strong> to be able to create forum content, and', $variables) . '</li><li>' .
+-                              t('the !post_comments (and optionally !skip_comment_approval) permission AND <em>Post</em> to be able to post comments/replies;', $variables) . '</li><li>' .
++                              t('the !post_comments (and optionally !skip_comment_approval) permission <strong>AND <em>Comment on posts</em></strong> to be able to post comments/replies;', $variables) . '</li><li>' .
+                               t('the !edit_own_forum_content or !edit_any_forum_content (and similar) permissions (<strong>OR <em>Edit</em></strong>) can be added if desired, <strong>plus</strong>', $variables) . '</li><li>' .
+                               t('the !delete_own_forum_content or !delete_any_forum_content (and similar) permissions (<strong>OR <em>Delete</em></strong>) if desired;', $variables) . '</li><li>' .
+                               t('the !administer_comments (global!) permission <strong>OR <em>Edit</em>/<em>Delete</em></strong> to be able to edit/delete comments;', $variables) . '</li><li>' .
+@@ -199,7 +199,7 @@ function _forum_access_forum_form_after_build_template($form, &$form_state) {
+     $form['template']['#attributes']['class'] = array('collapsible');
+ 
+     $settings = _forum_access_get_settings($template_tid);
+-    foreach (array('view', 'create', 'update', 'delete') as $grant_type) {
++    foreach (array('view', 'create', 'comment_create', 'update', 'delete') as $grant_type) {
+       if (empty($form['grants']['checkboxes'][$grant_type])) {
+         continue;
+       }
+@@ -246,10 +246,11 @@ function _forum_access_forum_grants_form(&$form_state, $is_container, $settings)
+   }
+   else {
+     $cols = array(
+-      'view'   => t('View this forum'),
+-      'create' => t('Post in this forum'),
+-      'update' => t('Edit posts'),
+-      'delete' => t('Delete posts'),
++      'view'           => t('View this forum'),
++      'create'         => t('Post in this forum'),
++      'comment_create' => t('Comment on posts'),
++      'update'         => t('Edit posts'),
++      'delete'         => t('Delete posts'),
+     );
+   }
+   $form['col_ids'] = array(
+@@ -598,7 +599,7 @@ function _forum_access_form_submit($form, &$form_state) {
+     acl_save_form($fa_values['acl'], $fa_priority);
+   }
+   $insert = db_insert('forum_access');
+-  $insert->fields(array('tid', 'rid', 'grant_view', 'grant_update', 'grant_delete', 'grant_create', 'priority'));
++  $insert->fields(array('tid', 'rid', 'grant_view', 'grant_update', 'grant_comment_create', 'grant_delete', 'grant_create', 'priority'));
+   foreach ($access['view'] as $rid => $checked) {
+     if (isset($permissions[$rid]['bypass node access'])) {
+       // We prefer not to save records for these roles, because they have access anyway.
+@@ -621,13 +622,14 @@ function _forum_access_form_submit($form, &$form_state) {
+     }
+     else {
+       $insert->values(array(
+-        'tid'          => $tid,
+-        'rid'          => $rid,
+-        'grant_view'   => (int) ($checked && empty($form_initial_values['grants']['checkboxes']['view'][$rid]['#disabled'])),
+-        'grant_update' => (int) (!empty($access['update'][$rid]) && empty($form_initial_values['grants']['checkboxes']['update'][$rid]['#disabled'])),
+-        'grant_delete' => (int) (!empty($access['delete'][$rid]) && empty($form_initial_values['grants']['checkboxes']['delete'][$rid]['#disabled'])),
+-        'grant_create' => (int) (!empty($access['create'][$rid])),
+-        'priority'     => (int) $fa_priority,
++        'tid'                  => $tid,
++        'rid'                  => $rid,
++        'grant_view'           => (int) ($checked && empty($form_initial_values['grants']['checkboxes']['view'][$rid]['#disabled'])),
++        'grant_update'         => (int) (!empty($access['update'][$rid]) && empty($form_initial_values['grants']['checkboxes']['update'][$rid]['#disabled'])),
++        'grant_delete'         => (int) (!empty($access['delete'][$rid]) && empty($form_initial_values['grants']['checkboxes']['delete'][$rid]['#disabled'])),
++        'grant_create'         => (int) (!empty($access['create'][$rid])),
++        'grant_comment_create' => (int) (!empty($access['comment_create'][$rid])),
++        'priority'             => (int) $fa_priority,
+       ));
+     }
+   }
+@@ -742,11 +744,12 @@ function _forum_access_update_batch_finished($success, $results, $operations) {
+  * Helper function to retrieve the settings for a forum.
+  */
+ function _forum_access_get_settings($tid = NULL) {
+-  $return = array('view' => array(), 'create' => array(), 'update' => array(), 'delete' => array(), 'priority' => 0);
++  $return = array('view' => array(), 'create' => array(), 'comment_create' => array(), 'update' => array(), 'delete' => array(), 'priority' => 0);
+   if (!isset($tid)) {
+-    // Default to all users can read; all logged in users can post.
++    // Default to all users can read; all logged in users can post and comment.
+     $return['view'] = array(DRUPAL_ANONYMOUS_RID, DRUPAL_AUTHENTICATED_RID);
+     $return['create'] = array(DRUPAL_AUTHENTICATED_RID);
++    $return['comment_create'] = array(DRUPAL_AUTHENTICATED_RID);
+   }
+   else {
+     $result = db_query("SELECT * FROM {forum_access} where tid = :tid", array(
+@@ -765,6 +768,9 @@ function _forum_access_get_settings($tid = NULL) {
+       if ($access->grant_create) {
+         $return['create'][] = $access->rid;
+       }
++      if ($access->grant_comment_create) {
++        $return['comment_create'][] = $access->rid;
++      }
+       if ($access->rid == DRUPAL_AUTHENTICATED_RID) { // this is our reference
+         $return['priority'] = $access->priority;
+       }
+diff --git a/forum_access.install b/forum_access.install
+index fbda65b..9281b0f 100644
+--- a/forum_access.install
++++ b/forum_access.install
+@@ -86,6 +86,13 @@ function forum_access_schema() {
+         'unsigned'    => TRUE,
+         'not null'    => TRUE,
+         'default'     => 0),
++      'grant_comment_create' => array(
++        'description' => 'Whether to grant "comment create" permission.',
++        'type'        => 'int',
++        'size'        => 'tiny',
++        'unsigned'    => TRUE,
++        'not null'    => TRUE,
++        'default'     => 0),
+       'priority'  => array(
+         'description' => 'The priority of this grant.',
+         'type'        => 'int',
+@@ -184,3 +191,27 @@ function forum_access_update_7001() {
+ function forum_access_update_7002() {
+   variable_del('forum_access_D5_legacy_mode');
+ }
++
++/**
++ * Add support for 'comment' permission, #545916.
++ */
++function forum_access_update_7003($sandbox) {
++  db_add_field('forum_access', 'grant_comment_create',
++    array(
++      'description' => 'Whether to grant "comment_create" permission.',
++      'type'        => 'int',
++      'size'        => 'tiny',
++      'unsigned'    => TRUE,
++      'not null'    => TRUE,
++      'default'     => 0,
++    ));
++
++  /*
++   * In previous versions of forum_access, the ability to comment was
++   * given to anyone with the ability to post('create') a new forum
++   * topic.
++   */
++  db_update('forum_access')
++    ->expression('grant_comment_create', 'grant_create')
++    ->execute();
++}
+diff --git a/forum_access.module b/forum_access.module
+index 68b7c1f..c4fc0d5 100644
+--- a/forum_access.module
++++ b/forum_access.module
+@@ -104,7 +104,7 @@ function _forum_access_comment_access_callback($comment, $op) {
+     // 'reply' is governed by AND, return TRUE by default.
+     $node = $comment;
+     if ($tid = _forum_access_get_tid($node)) {
+-      return forum_access_access('create', $tid);
++      return forum_access_access('comment_create', $tid);
+     }
+     return TRUE;
+   }
+@@ -231,15 +231,15 @@ function forum_access_node_access_records($node) {
+           continue; // Don't provide any useless grants!
+         }
+         $grants[$tid][] = array(
+-          'realm'        => 'forum_access',
+-          'gid'          => $grant->rid,
+-          'grant_view'   => $grant->grant_view,
+-          'grant_update' => $grant->grant_update,
+-          'grant_delete' => $grant->grant_delete,
+-          'priority'     => $grant->priority,
++          'realm'                => 'forum_access',
++          'gid'                  => $grant->rid,
++          'grant_view'           => $grant->grant_view,
++          'grant_update'         => $grant->grant_update,
++          'grant_delete'         => $grant->grant_delete,
++          'grant_comment_create' => $grant->grant_comment_create,
++          'priority'             => $grant->priority,
+         );
+       }
+-      //dsm("forum_access_node_access_records($node->nid) (tid=$tid) returns ". var_export($grants[$tid], TRUE), 'status');
+     }
+     if (isset($grants[$tid])) {
+       return $grants[$tid];
+diff --git a/forum_access.node.inc b/forum_access.node.inc
+index c6d1e99..9371992 100644
+--- a/forum_access.node.inc
++++ b/forum_access.node.inc
+@@ -21,7 +21,7 @@ function _forum_access_node_view_alter(&$build, $tid) {
+ 
+   //dpm($build, '_forum_access_node_view_alter() BEFORE:');
+   $node = $build['#node'];
+-  if (forum_access_node_access($node, 'create', $user) == NODE_ACCESS_DENY) {
++  if (forum_access_node_access($node, 'comment_create', $user) == NODE_ACCESS_DENY) {
+     unset($build['links']['comment']['#links']['comment-add']);
+     unset($build['comments']['comment_form']);
+   }
+@@ -41,15 +41,15 @@ function _forum_access_comment_view_alter(&$build, $tid) {
+   //dpm($build, "_forum_access_comment_view_alter() tid=[$tid] cid=[$comment->cid] BEFORE:");
+   $links =& $build['links']['comment']['#links'];
+ 
+-  if ($user->uid != 1 && !user_access('bypass node access') && !forum_access_access('create', $tid)) {
++  if ($user->uid != 1 && !user_access('bypass node access') && !forum_access_access('comment_create', $tid)) {
+     unset($links['comment-reply']);
+   }
+ 
+   if (!user_access('administer comments') || !empty($user->_forum_access_moderator)) {
+     $default_link_keys = array(
+-      'create' => array('comment-reply'),
+-      'update' => array('comment-edit', 'comment-approve'),
+-      'delete' => array('comment-delete'),
++      'comment_create' => array('comment-reply'),
++      'update'         => array('comment-edit', 'comment-approve'),
++      'delete'         => array('comment-delete'),
+     );
+     forum_access_enable_moderator();
+     $admin_links = comment_links($comment, $node);
+diff --git a/tests/forum_access_test_base.php b/tests/forum_access_test_base.php
+index 834f20f..5f5151d 100644
+--- a/tests/forum_access_test_base.php
++++ b/tests/forum_access_test_base.php
+@@ -434,7 +434,7 @@ class ForumAccessBaseTestCase extends ForumTestCase {
+ 
+ 
+           // Check comment visibility.
+-          if (!$is_super_user && (!user_access('access comments', $account) || empty($account->access['view'])) && !user_access('administer comments', $account)) {
++          if (!$is_super_user && (!user_access('access comments', $account)) && empty($account->access['comment_create']) && !user_access('administer comments', $account)) {
+             $this->assertNoLinkByHref("/comment/$comment->cid#comment-$comment->cid");
+             $this->drupalGet("comment/$comment->cid");
+             $this->assertResponse(403, "^^^ $account->name cannot see comment '$comment->subject'.");
+@@ -442,7 +442,7 @@ class ForumAccessBaseTestCase extends ForumTestCase {
+           else {
+             $this->assertLinkByHref(url("comment/$comment->cid", array('fragment' => "comment-$comment->cid")));
+             // Check post comment / reply link.
+-            if (((!user_access('post comments', $account) && !user_access('post comments without approval', $account)) || empty($account->access['create'])) && !$is_super_user) {
++            if (((!user_access('post comments', $account) && !user_access('post comments without approval', $account)) && empty($account->access['comment_create'])) && !$is_super_user) {
+               if (!$account->uid) {
+                 $this->assertLinkByHref("/user/login?destination=node/$node->nid#comment-form");
+               }
